@@ -1,0 +1,9 @@
+**/*.pth
+**/*.pth.tar
+**/*.ckpt
+**/*.onnx
+**/*.pt
+Data/Example/outputs/templates
+Data/Example/outputs/sam6d_results/*.json
+Data/Example/outputs/sam6d_results/*.npz
+Data/Example/outputs/sam6d_results/*.png

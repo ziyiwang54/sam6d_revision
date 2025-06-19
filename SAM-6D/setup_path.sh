@@ -1,0 +1,5 @@
+export OUTPUT_DIR=$(realpath -q Data/Example/outputs/)
+export CAD_PATH=$(realpath -q Data/Example/obj_000005.ply)
+export RGB_PATH=$(realpath -q Data/Example/rgb.png )
+export DEPTH_PATH=$(realpath -q Data/Example/depth.png)
+export CAMERA_PATH=$(realpath -q Data/Example/camera.json)
