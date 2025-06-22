@@ -3,7 +3,7 @@
 **/*.ckpt
 **/*.onnx
 **/*.pt
-Data/Example/outputs/templates
-Data/Example/outputs/sam6d_results/*.json
-Data/Example/outputs/sam6d_results/*.npz
-Data/Example/outputs/sam6d_results/*.png
+SAM-6D/Data/Example/outputs/templates
+SAM-6D/Data/Example/outputs/sam6d_results/*.json
+SAM-6D/Data/Example/outputs/sam6d_results/*.npz
+SAM-6D/Data/Example/outputs/sam6d_results/*.png
