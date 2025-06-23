@@ -9,12 +9,13 @@
 
 ### Download ISM pretrained model
 export ISM_DIR=$(realpath -q Instance_Segmentation_Model)
+export PEM_DIR=$(realpath -q Pose_Estimation_Model)
+
 cd $ISM_DIR
 # python download_sam.py
 python download_fastsam.py
 python download_dinov2.py
 
 ### Download PEM pretrained model
-export PEM_DIR=$(realpath -q Pose_Estimation_Model)
 cd $PEM_DIR
 python download_sam6d-pem.py

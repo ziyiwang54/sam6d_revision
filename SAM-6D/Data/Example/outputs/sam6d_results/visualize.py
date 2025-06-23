@@ -146,7 +146,7 @@ else:
 print_flags_status()
 
 # Load camera intrinsics from camera.json
-with open("../../camera.json") as f:
+with open("../../camera_intrinsics/camera.json") as f:
     cam_data = json.load(f)
     cam_K = cam_data['cam_K']
     K = np.array([
