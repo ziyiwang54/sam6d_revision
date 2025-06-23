@@ -11,8 +11,8 @@ export CAD_PATH=$(realpath -q Data/Example/mesh/obj_landingpole.ply)
 # export DEPTH_PATH=$(realpath -q Data/Example/depth/depth_stop*.png)
 # export RGB_PATH=$(realpath -q Data/Example/rgb/rgb_connector_close_scene.png)
 # export DEPTH_PATH=$(realpath -q Data/Example/depth/depth_connector_close_scene.png)
-export RGB_PATH=$(realpath -q Data/Example/rgb/rgb_landingpole_far.png)
-export DEPTH_PATH=$(realpath -q Data/Example/depth/depth_landingpole_far.png)
+export RGB_PATH=$(realpath -q Data/Example/rgb/rgb_landingpole_mid.png)
+export DEPTH_PATH=$(realpath -q Data/Example/depth/depth_landingpole_mid.png)
 export CAMERA_PATH=$(realpath -q Data/Example/camera_intrinsics/camera.json)
 
 export RENDER_DIR=$(realpath -q Render)
@@ -40,7 +40,7 @@ python run_inference_custom.py --segmentor_model $SEGMENTOR_MODEL --output_dir $
 export SEG_PATH=$OUTPUT_DIR/sam6d_results/detection_ism.json
 
 cd $PEM_DIR
-python run_inference_custom.py --output_dir $OUTPUT_DIR --cad_path $CAD_PATH --rgb_path $RGB_PATH --depth_path $DEPTH_PATH --cam_path $CAMERA_PATH --seg_path $SEG_PATH --debug
+python run_inference_custom_v2.py --output_dir $OUTPUT_DIR --cad_path $CAD_PATH --rgb_path $RGB_PATH --depth_path $DEPTH_PATH --cam_path $CAMERA_PATH --seg_path $SEG_PATH # --debug True
 
 cd $OUTPUT_DIR/sam6d_results
-python visualize.py
+python visualize3d.py

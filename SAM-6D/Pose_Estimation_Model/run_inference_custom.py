@@ -161,7 +161,7 @@ def _get_template(path, cfg, tem_index=1):
 
     choose = (mask>0).astype(np.float32).flatten().nonzero()[0]
     if len(choose) <= cfg.n_sample_template_point:
-        choose_idx = np.random.choice(np.arange(len(choose)), cfg.n_sample_template_point)
+        choose_idx = np.random.choice(np.arange(len(choose)), cfg.n_sample_template_point, replace=True)
     else:
         choose_idx = np.random.choice(np.arange(len(choose)), cfg.n_sample_template_point, replace=False)
     choose = choose[choose_idx]
@@ -256,11 +256,11 @@ def get_test_data(rgb_path, depth_path, cam_path, cad_path, seg_path, det_score_
     model_points = mesh.sample(cfg.n_sample_model_point).astype(np.float32) / 1000.0
     radius = np.max(np.linalg.norm(model_points, axis=1))
     
-    debug_print(f"=> CAD Model Analysis:", debug)
+    debug_print(f"=> CAD Model Analysis (for reference only - not used for filtering):", debug)
     debug_print(f"   Model points sampled: {len(model_points)}", debug)
     debug_print(f"   Model extent: X=[{np.min(model_points[:,0]):.3f}, {np.max(model_points[:,0]):.3f}], Y=[{np.min(model_points[:,1]):.3f}, {np.max(model_points[:,1]):.3f}], Z=[{np.min(model_points[:,2]):.3f}, {np.max(model_points[:,2]):.3f}]", debug)
     debug_print(f"   Model radius (max distance from origin): {radius:.3f}m", debug)
-    debug_print(f"   Radius threshold for filtering: {radius * 1.2:.3f}m", debug)
+    debug_print(f"   NOTE: Using BOUNDING BOX approach - all valid points in 2D bbox region", debug)
 
     # Create visualization images to show which parts of depth are being used
     depth_usage_viz = np.zeros_like(whole_depth)  # Will show used depth regions
@@ -377,166 +377,54 @@ def get_test_data(rgb_path, depth_path, cam_path, cad_path, seg_path, det_score_
                 cv2.putText(depth_bbox_viz, bbox_text, (x1, max(y1-35, 45)), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                 
+                # Add bounding box approach text
+                approach_text = 'BOUNDING BOX APPROACH (All valid points in bbox)'
+                cv2.putText(depth_bbox_viz, approach_text, (x1, max(y1-60, 70)), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+                
                 # Save the depth image with bounding box
                 cv2.imwrite(f"{output_dir}/debug_bbox/detection_{idx}_depth_with_bbox.png", depth_bbox_viz)
                 debug_print(f"    Saved depth with bbox: detection_{idx}_depth_with_bbox.png", debug)
-                
-                # Create depth image with radius visualization
-                depth_with_radius = depth_bbox_viz.copy()
-                
-                # Get the center of the bounding box in image coordinates
-                bbox_center_img = ((x1 + x2) // 2, (y1 + y2) // 2)
-                
-                # Convert center to 3D point to get actual object center
-                center_depth = whole_depth[bbox_center_img[1], bbox_center_img[0]]
-                if center_depth > 0:
-                    # Convert image coordinates to 3D world coordinates to get the actual center
-                    bbox_center_3d = whole_pts[bbox_center_img[1], bbox_center_img[0], :]
-                    
-                    # Calculate adaptive radius for visualization (same calculation as below)
-                    bbox_width = x2 - x1
-                    bbox_height = y2 - y1
-                    bbox_diag_pixels = np.sqrt(bbox_width**2 + bbox_height**2)
-                    
-                    # Convert bbox diagonal to 3D distance using depth and camera intrinsics
-                    fx = K[0, 0]  # focal length in x
-                    fy = K[1, 1]  # focal length in y
-                    pixel_size = center_depth / ((fx + fy) / 2)  # Average pixel size at this depth
-                    bbox_diag_3d = bbox_diag_pixels * pixel_size
-                    
-                    # Adaptive radius: use a fraction of bbox diagonal, but with min/max bounds
-                    adaptive_radius_viz = bbox_diag_3d * 0.6  # 60% of bbox diagonal
-                    min_radius = radius * 0.8  # Minimum: 80% of CAD model radius
-                    max_radius = radius * 3.0  # Maximum: 300% of CAD model radius
-                    adaptive_radius_viz = np.clip(adaptive_radius_viz, min_radius, max_radius)
-                    
-                    # Calculate radius thresholds in pixels (approximate)
-                    # This is approximate since we're projecting 3D radius to 2D
-                    # Use camera intrinsics to estimate pixel size at the depth
-                    pixel_size_x = center_depth / fx
-                    pixel_size_y = center_depth / fy
-                    
-                    # Convert 3D radius to approximate pixel radius
-                    adaptive_radius_pixels = int(adaptive_radius_viz / pixel_size_x)
-                    
-                    # Draw adaptive radius circle in yellow
-                    cv2.circle(depth_with_radius, bbox_center_img, adaptive_radius_pixels, (0, 255, 255), 2)  # Yellow circle
-                    
-                    # Draw relaxed radius circle (1.5x adaptive) in cyan for comparison
-                    relaxed_adaptive_radius_viz = adaptive_radius_viz * 1.5
-                    relaxed_radius_pixels = int(relaxed_adaptive_radius_viz / pixel_size_x)
-                    cv2.circle(depth_with_radius, bbox_center_img, relaxed_radius_pixels, (255, 255, 0), 2)  # Cyan circle
-                    
-                    # Add center point
-                    cv2.circle(depth_with_radius, bbox_center_img, 5, (255, 0, 255), -1)  # Magenta center point
-                    
-                    # Add radius information text
-                    radius_text = f'Adaptive R: {adaptive_radius_viz:.3f}m ({adaptive_radius_pixels}px)'
-                    relaxed_text = f'Relaxed R: {relaxed_adaptive_radius_viz:.3f}m ({relaxed_radius_pixels}px)'
-                    center_text = f'Center: [{bbox_center_3d[0]:.3f}, {bbox_center_3d[1]:.3f}, {bbox_center_3d[2]:.3f}]m'
-                    cad_text = f'CAD R: {radius:.3f}m (original model radius)'
-                    
-                    # Position text to avoid overlap
-                    text_y_start = max(y1 - 120, 60)
-                    cv2.putText(depth_with_radius, radius_text, (x1, text_y_start), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-                    cv2.putText(depth_with_radius, relaxed_text, (x1, text_y_start + 20), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
-                    cv2.putText(depth_with_radius, center_text, (x1, text_y_start + 40), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 255), 1)
-                    cv2.putText(depth_with_radius, cad_text, (x1, text_y_start + 60), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (128, 128, 128), 1)
-                    
-                    # Calculate coverage area
-                    total_bbox_pixels = (x2 - x1) * (y2 - y1)
-                    adaptive_radius_area = np.pi * adaptive_radius_pixels * adaptive_radius_pixels
-                    relaxed_radius_area = np.pi * relaxed_radius_pixels * relaxed_radius_pixels
-                    
-                    adaptive_coverage = min(100.0, (adaptive_radius_area / total_bbox_pixels) * 100)
-                    relaxed_coverage = min(100.0, (relaxed_radius_area / total_bbox_pixels) * 100)
-                    
-                    coverage_text = f'Coverage: Adaptive {adaptive_coverage:.1f}%, Relaxed {relaxed_coverage:.1f}%'
-                    cv2.putText(depth_with_radius, coverage_text, (x1, text_y_start + 80), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-                    
-                    debug_print(f"    Object center (3D): [{bbox_center_3d[0]:.3f}, {bbox_center_3d[1]:.3f}, {bbox_center_3d[2]:.3f}]m", debug)
-                    debug_print(f"    Adaptive radius: {adaptive_radius_viz:.3f}m ({adaptive_radius_pixels} pixels, {adaptive_coverage:.1f}% bbox coverage)", debug)
-                    debug_print(f"    Relaxed radius: {relaxed_adaptive_radius_viz:.3f}m ({relaxed_radius_pixels} pixels, {relaxed_coverage:.1f}% bbox coverage)", debug)
-                
-                # Save the depth image with radius visualization
-                cv2.imwrite(f"{output_dir}/debug_bbox/detection_{idx}_depth_with_radius.png", depth_with_radius)
-                debug_print(f"    Saved depth with radius: detection_{idx}_depth_with_radius.png", debug)
         else:
             debug_print(f"  Skipping: insufficient mask pixels ({np.sum(mask)} <= 32)", debug)
             continue
             
-        mask = mask[y1:y2, x1:x2]
-        choose = mask.astype(np.float32).flatten().nonzero()[0]
-        debug_print(f"  Choose points: {len(choose)}", debug)
-
-        # pts
-        cloud = whole_pts.copy()[y1:y2, x1:x2, :].reshape(-1, 3)[choose, :]
-        center = np.mean(cloud, axis=0)
-        tmp_cloud = cloud - center[None, :]
+        # pts - Use ALL VALID POINTS within the 2D bounding box region (not just segmentation mask)
+        bbox_depth = whole_depth[y1:y2, x1:x2].flatten()
+        bbox_pts = whole_pts.copy()[y1:y2, x1:x2, :].reshape(-1, 3)
         
-        # DEBUG: Analyze point cloud before radius filtering
-        debug_print(f"  DEBUG - Point cloud analysis:", debug)
-        debug_print(f"    Total points from choose: {len(cloud)}", debug)
-        debug_print(f"    Cloud center: [{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}]m", debug)
-        debug_print(f"    Cloud extent: X=[{np.min(cloud[:,0]):.3f}, {np.max(cloud[:,0]):.3f}], Y=[{np.min(cloud[:,1]):.3f}, {np.max(cloud[:,1]):.3f}], Z=[{np.min(cloud[:,2]):.3f}, {np.max(cloud[:,2]):.3f}]", debug)
-        debug_print(f"    Distance from origin: {np.linalg.norm(center):.3f}m", debug)
+        # Find all valid points in the bounding box (depth > 0)
+        valid_depth_mask = bbox_depth > 0
+        choose = valid_depth_mask.nonzero()[0]
+        debug_print(f"  Choose points from bbox: {len(choose)} (all valid points)", debug)
         
-        # Show distances from center
-        distances_from_center = np.linalg.norm(tmp_cloud, axis=1)
-        debug_print(f"    Point distances from center: min={np.min(distances_from_center):.3f}m, max={np.max(distances_from_center):.3f}m, mean={np.mean(distances_from_center):.3f}m", debug)
-        debug_print(f"    Model radius threshold: {radius:.3f}m, scaled threshold: {radius * 1.2:.3f}m", debug)
-        
-        # Calculate adaptive radius based on bounding box size
-        bbox_width = x2 - x1
-        bbox_height = y2 - y1
-        bbox_diag_pixels = np.sqrt(bbox_width**2 + bbox_height**2)
-        
-        # Convert bbox diagonal to 3D distance using depth and camera intrinsics
-        center_depth = np.mean(cloud[:, 2])  # Use actual point cloud depth
-        fx = K[0, 0]
-        fy = K[1, 1]
-        pixel_size = center_depth / ((fx + fy) / 2)  # Average pixel size at this depth
-        bbox_diag_3d = bbox_diag_pixels * pixel_size
-        
-        # Adaptive radius: use a fraction of bbox diagonal, but with min/max bounds
-        adaptive_radius = bbox_diag_3d * 0.6  # 60% of bbox diagonal
-        min_radius = radius * 0.8  # Minimum: 80% of CAD model radius
-        max_radius = radius * 3.0  # Maximum: 300% of CAD model radius
-        adaptive_radius = np.clip(adaptive_radius, min_radius, max_radius)
-        
-        debug_print(f"  Adaptive radius calculation:", debug)
-        debug_print(f"    Bbox size: {bbox_width}x{bbox_height} pixels, diagonal: {bbox_diag_pixels:.1f} pixels", debug)
-        debug_print(f"    Bbox 3D diagonal: {bbox_diag_3d:.3f}m, adaptive radius: {adaptive_radius:.3f}m", debug)
-        debug_print(f"    CAD model radius: {radius:.3f}m, bounds: [{min_radius:.3f}m, {max_radius:.3f}m]", debug)
-        
-        flag = np.linalg.norm(tmp_cloud, axis=1) < adaptive_radius
-        
-        debug_print(f"  Points within adaptive radius: {np.sum(flag)} / {len(flag)} (radius: {adaptive_radius:.3f}m)", debug)
-        
-        # DEBUG: Show why points are being filtered out
-        if np.sum(flag) == 0:
-            debug_print(f"  DEBUG - All points filtered out! Minimum distance to center: {np.min(distances_from_center):.3f}m vs threshold {adaptive_radius:.3f}m", debug)
-            debug_print(f"  DEBUG - Consider increasing bbox diagonal multiplier or max radius bound", debug)
-        elif np.sum(flag) < len(flag):
-            filtered_distances = distances_from_center[~flag]
-            debug_print(f"  DEBUG - {len(filtered_distances)} points filtered out with distances: min={np.min(filtered_distances):.3f}m, max={np.max(filtered_distances):.3f}m", debug)
-        
-        if np.sum(flag) < 4:
-            debug_print(f"  Skipping: insufficient points within radius ({np.sum(flag)} < 4)", debug)
+        if len(choose) == 0:
+            debug_print(f"  Skipping: no valid depth points in bounding box region", debug)
             continue
-            
-        choose = choose[flag]
-        cloud = cloud[flag]
 
-        # Visualize the points that are actually used (within radius)
-        mask_cropped = mask.copy()
-        points_used_mask = np.zeros_like(mask_cropped, dtype=bool)
-        points_used_mask.flat[choose] = True
+        # Get point cloud from all valid points in bounding box
+        cloud = bbox_pts[choose, :]
+        center = np.mean(cloud, axis=0) if len(cloud) > 0 else np.array([0, 0, 0])
+        
+        # DEBUG: Analyze point cloud using bounding box approach
+        debug_print(f"  DEBUG - Bounding box point cloud analysis:", debug)
+        debug_print(f"    Total valid points in bbox: {len(cloud)}", debug)
+        if len(cloud) > 0:
+            debug_print(f"    Cloud center: [{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}]m", debug)
+            debug_print(f"    Cloud extent: X=[{np.min(cloud[:,0]):.3f}, {np.max(cloud[:,0]):.3f}], Y=[{np.min(cloud[:,1]):.3f}, {np.max(cloud[:,1]):.3f}], Z=[{np.min(cloud[:,2]):.3f}, {np.max(cloud[:,2]):.3f}]", debug)
+            debug_print(f"    Distance from origin: {np.linalg.norm(center):.3f}m", debug)
+        
+        # Use ALL valid points from the bounding box region
+        debug_print(f"  Using all {len(cloud)} valid points from bounding box region", debug)
+        
+        # Check if we have enough points
+        if len(cloud) < 4:
+            debug_print(f"  Skipping: insufficient points in bbox ({len(cloud)} < 4)", debug)
+            continue
+
+        # Visualize the points that are actually used (all valid points in bbox)
+        bbox_shape = whole_depth[y1:y2, x1:x2].shape
+        points_used_mask = valid_depth_mask.reshape(bbox_shape)
         
         # Map back to full image coordinates
         full_points_mask = np.zeros_like(whole_depth, dtype=bool)
@@ -546,20 +434,23 @@ def get_test_data(rgb_path, depth_path, cam_path, cad_path, seg_path, det_score_
         point_color = np.array([255, 255, 0]) if idx == 0 else np.array([0, 255, 255])  # Yellow/Cyan
         segmentation_viz[full_points_mask] = point_color
 
+        # Sample points for the model
         if len(choose) <= cfg.n_sample_observed_point:
-            choose_idx = np.random.choice(np.arange(len(choose)), cfg.n_sample_observed_point)
+            choose_idx = np.random.choice(np.arange(len(choose)), cfg.n_sample_observed_point, replace=True)
         else:
             choose_idx = np.random.choice(np.arange(len(choose)), cfg.n_sample_observed_point, replace=False)
-        choose = choose[choose_idx]
+        choose_sampled = choose[choose_idx]
         cloud = cloud[choose_idx]
 
         # rgb
         rgb = whole_image.copy()[y1:y2, x1:x2, :][:,:,::-1]
         if cfg.rgb_mask_flag:
-            rgb = rgb * (mask[:,:,None]>0).astype(np.uint8)
+            # For RGB masking, we can still use the original segmentation mask cropped to bbox
+            mask_cropped_for_rgb = mask[y1:y2, x1:x2]
+            rgb = rgb * (mask_cropped_for_rgb[:,:,None]>0).astype(np.uint8)
         rgb = cv2.resize(rgb, (cfg.img_size, cfg.img_size), interpolation=cv2.INTER_LINEAR)
         rgb = rgb_transform(np.array(rgb))
-        rgb_choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], cfg.img_size)
+        rgb_choose = get_resize_rgb_choose(choose_sampled, [y1, y2, x1, x2], cfg.img_size)
 
         all_rgb.append(torch.FloatTensor(rgb))
         all_cloud.append(torch.FloatTensor(cloud))
@@ -607,87 +498,62 @@ def get_test_data(rgb_path, depth_path, cam_path, cad_path, seg_path, det_score_
                 debug_print(f"  Still skipping: insufficient mask pixels ({np.sum(mask)} <= 16)", debug)
                 continue
                 
-            mask = mask[y1:y2, x1:x2]
-            choose = mask.astype(np.float32).flatten().nonzero()[0]
+            # pts - Use ALL VALID POINTS within the 2D bounding box region (relaxed criteria)
+            bbox_depth = whole_depth[y1:y2, x1:x2].flatten()
+            bbox_pts = whole_pts.copy()[y1:y2, x1:x2, :].reshape(-1, 3)
+            
+            # Find all valid points in the bounding box (depth > 0)
+            valid_depth_mask = bbox_depth > 0
+            choose = valid_depth_mask.nonzero()[0]
+            
+            if len(choose) == 0:
+                debug_print(f"  Still skipping: no valid depth points in bounding box region", debug)
+                continue
 
-            # pts
-            cloud = whole_pts.copy()[y1:y2, x1:x2, :].reshape(-1, 3)[choose, :]
-            center = np.mean(cloud, axis=0)
-            tmp_cloud = cloud - center[None, :]
+            # Get point cloud from all valid points in bounding box
+            cloud = bbox_pts[choose, :]
+            center = np.mean(cloud, axis=0) if len(cloud) > 0 else np.array([0, 0, 0])
             
             # DEBUG: Relaxed criteria analysis
-            debug_print(f"    RELAXED - Point cloud analysis:", debug)
-            debug_print(f"      Points from choose: {len(cloud)}", debug)
-            debug_print(f"      Cloud center: [{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}]m", debug)
-            debug_print(f"      Distance from origin: {np.linalg.norm(center):.3f}m", debug)
-            
-            distances_from_center = np.linalg.norm(tmp_cloud, axis=1)
-            debug_print(f"      Point distances: min={np.min(distances_from_center):.3f}m, max={np.max(distances_from_center):.3f}m", debug)
-            
-            # Calculate adaptive radius for relaxed criteria too
-            bbox_width = x2 - x1
-            bbox_height = y2 - y1
-            bbox_diag_pixels = np.sqrt(bbox_width**2 + bbox_height**2)
-            
-            # Convert bbox diagonal to 3D distance using depth and camera intrinsics
-            center_depth = np.mean(cloud[:, 2])  # Use actual point cloud depth
-            fx = K[0, 0]
-            fy = K[1, 1]
-            pixel_size = center_depth / ((fx + fy) / 2)  # Average pixel size at this depth
-            bbox_diag_3d = bbox_diag_pixels * pixel_size
-            
-            # More relaxed adaptive radius: use larger fraction of bbox diagonal
-            relaxed_adaptive_radius = bbox_diag_3d * 1.0  # 100% of bbox diagonal for relaxed
-            min_radius = radius * 0.5  # More relaxed minimum: 50% of CAD model radius
-            max_radius = radius * 5.0  # More relaxed maximum: 500% of CAD model radius
-            relaxed_adaptive_radius = np.clip(relaxed_adaptive_radius, min_radius, max_radius)
-            
-            debug_print(f"      Relaxed adaptive radius threshold: {relaxed_adaptive_radius:.3f}m", debug)
-            
-            debug_print(f"      RELAXED - Adaptive radius calculation:", debug)
-            debug_print(f"        Bbox size: {bbox_width}x{bbox_height} pixels, diagonal: {bbox_diag_pixels:.1f} pixels", debug)
-            debug_print(f"        Bbox 3D diagonal: {bbox_diag_3d:.3f}m, relaxed adaptive radius: {relaxed_adaptive_radius:.3f}m", debug)
-            debug_print(f"        CAD model radius: {radius:.3f}m, relaxed bounds: [{min_radius:.3f}m, {max_radius:.3f}m]", debug)
-            
-            flag = np.linalg.norm(tmp_cloud, axis=1) < relaxed_adaptive_radius
+            debug_print(f"    RELAXED - Bounding box point cloud analysis:", debug)
+            debug_print(f"      Valid points in bbox: {len(cloud)}", debug)
+            if len(cloud) > 0:
+                debug_print(f"      Cloud center: [{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}]m", debug)
+                debug_print(f"      Distance from origin: {np.linalg.norm(center):.3f}m", debug)
             
             # Relaxed criterion 2: Accept with fewer points
-            if np.sum(flag) < 2:  # Reduced from 4 to 2
-                debug_print(f"  Still skipping: insufficient points within radius ({np.sum(flag)} < 2)", debug)
+            if len(cloud) < 2:  # Reduced from 4 to 2
+                debug_print(f"  Still skipping: insufficient points in bbox ({len(cloud)} < 2)", debug)
                 continue
-                
-            choose = choose[flag]
-            cloud = cloud[flag]
 
-            # Visualize the points used in relaxed criteria
-            mask_cropped = mask.copy()
-            points_used_mask = np.zeros_like(mask_cropped, dtype=bool)
-            if len(choose) > 0:
-                points_used_mask.flat[choose] = True
-                
-                # Map back to full image coordinates
-                full_points_mask = np.zeros_like(whole_depth, dtype=bool)
-                full_points_mask[y1:y2, x1:x2] = points_used_mask
-                
-                # Mark these points in white for relaxed criteria
-                segmentation_viz[full_points_mask] = np.array([255, 255, 255])
+            # Visualize the points used in relaxed criteria (all valid points in bbox)
+            bbox_shape = whole_depth[y1:y2, x1:x2].shape
+            points_used_mask = valid_depth_mask.reshape(bbox_shape)
+            
+            # Map back to full image coordinates
+            full_points_mask = np.zeros_like(whole_depth, dtype=bool)
+            full_points_mask[y1:y2, x1:x2] = points_used_mask
+            
+            # Mark these points in white for relaxed criteria
+            segmentation_viz[full_points_mask] = np.array([255, 255, 255])
 
             # Handle case where we have very few points
-            n_points_to_sample = min(cfg.n_sample_observed_point, len(choose))
-            if n_points_to_sample < len(choose):
-                choose_idx = np.random.choice(np.arange(len(choose)), n_points_to_sample, replace=False)
+            if len(choose) <= cfg.n_sample_observed_point:
+                choose_idx = np.random.choice(np.arange(len(choose)), cfg.n_sample_observed_point, replace=True)
             else:
-                choose_idx = np.arange(len(choose))
-            choose = choose[choose_idx]
+                choose_idx = np.random.choice(np.arange(len(choose)), cfg.n_sample_observed_point, replace=False)
+            choose_sampled = choose[choose_idx]
             cloud = cloud[choose_idx]
 
             # rgb
             rgb = whole_image.copy()[y1:y2, x1:x2, :][:,:,::-1]
             if cfg.rgb_mask_flag:
-                rgb = rgb * (mask[:,:,None]>0).astype(np.uint8)
+                # For RGB masking, use the original segmentation mask cropped to bbox
+                mask_cropped_for_rgb = mask[y1:y2, x1:x2]
+                rgb = rgb * (mask_cropped_for_rgb[:,:,None]>0).astype(np.uint8)
             rgb = cv2.resize(rgb, (cfg.img_size, cfg.img_size), interpolation=cv2.INTER_LINEAR)
             rgb = rgb_transform(np.array(rgb))
-            rgb_choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], cfg.img_size)
+            rgb_choose = get_resize_rgb_choose(choose_sampled, [y1, y2, x1, x2], cfg.img_size)
 
             all_rgb.append(torch.FloatTensor(rgb))
             all_cloud.append(torch.FloatTensor(cloud))
@@ -703,32 +569,33 @@ def get_test_data(rgb_path, depth_path, cam_path, cad_path, seg_path, det_score_
         print("\n" + "="*80)
         print("DIAGNOSIS: No valid detections found!")
         print("="*80)
-        print("This usually happens when objects are placed further from the camera.")
+        print("Using SEGMENTATION-ONLY approach (no radius filtering).")
         print("Here are the most likely causes and solutions:")
         print()
-        print("1. OBJECT SIZE MISMATCH:")
-        print(f"   - CAD model radius: {radius:.3f}m")
-        print(f"   - Points must be within {radius * 1.2:.3f}m of object center")
-        print(f"   - If object appears larger in depth image, increase radius multiplier")
-        print()
-        print("2. DEPTH SCALING ISSUES:")
-        print("   - Check if depth_scale in camera.json is correct")
-        print("   - Verify depth units (mm vs m)")
-        print()
-        print("3. SEGMENTATION QUALITY:")
+        print("1. SEGMENTATION QUALITY:")
         print("   - Check if masks cover the object properly")
         print("   - Verify mask has sufficient pixels (>32 for normal, >16 for relaxed)")
+        print("   - Ensure segmentation mask aligns with valid depth pixels")
         print()
-        print("4. CAMERA CALIBRATION:")
+        print("2. DEPTH DATA ISSUES:")
+        print("   - Check if depth_scale in camera.json is correct")
+        print("   - Verify depth units (mm vs m)")
+        print("   - Ensure depth image has valid values in segmented regions")
+        print()
+        print("3. CAMERA CALIBRATION:")
         print("   - Verify camera intrinsics are correct")
         print("   - Check if RGB and depth are properly aligned")
+        print()
+        print("4. POINT CLOUD GENERATION:")
+        print("   - Ensure segmented regions contain enough valid 3D points")
+        print("   - Check that depth values are reasonable in segmented areas")
         print()
         print("DEBUG FILES SAVED:")
         try:
             debug_output_dir = cfg.output_dir
         except AttributeError:
             debug_output_dir = "debug_output"
-        print(f"   - {debug_output_dir}/debug_bbox/: Bounding box depth analysis")
+        print(f"   - {debug_output_dir}/debug_bbox/: Segmentation analysis")
         print("   - Check the depth values and mask overlays")
         print("="*80)
         
@@ -785,9 +652,9 @@ def get_test_data(rgb_path, depth_path, cam_path, cad_path, seg_path, det_score_
         debug_print(f"  - segmentation_masks.png: Segmentation masks visualization", debug)
         debug_print(f"Color coding:", debug)
         debug_print(f"  - Red: Primary detection mask", debug)
-        debug_print(f"  - Yellow/Cyan: Points actually used for pose estimation (within object radius)", debug)
+        debug_print(f"  - Yellow/Cyan: Points actually used for pose estimation (segmentation-only)", debug)
         debug_print(f"  - Blue: Relaxed criteria detection mask", debug)
-        debug_print(f"  - White: Points used with relaxed criteria", debug)
+        debug_print(f"  - White: Points used with relaxed criteria (segmentation-only)", debug)
         debug_print(f"  - White rectangles: Bounding boxes (normal criteria)", debug)
         debug_print(f"  - Yellow rectangles: Bounding boxes (relaxed criteria)", debug)
 
@@ -905,4 +772,3 @@ if __name__ == "__main__":
     K = input_data['K'].detach().cpu().numpy()[[best_idx]]
     vis_img = visualize(img, pred_rot[[best_idx]], pred_trans[[best_idx]], model_points*1000, K, save_path)
     vis_img.save(save_path)
-

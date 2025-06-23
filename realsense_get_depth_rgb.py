@@ -31,7 +31,7 @@ def main():
     
     # Configure streams
     # For D435i, typical resolutions are 640x480, 848x480, 1280x720
-    width, height = 640, 480
+    width, height = 1280, 720
     fps = 30
     
     config.enable_stream(rs.stream.depth, width, height, rs.format.z16, fps)

@@ -14,7 +14,7 @@ SHOW_DISTANCE_INFO = False    # Show distance information
 SHOW_OBJECT_ID = True        # Show object IDs
 
 # Filtering parameters
-SCORE_THRESHOLD = 0.4        # Only show detections with score > this value
+SCORE_THRESHOLD = 0.0        # Only show detections with score > this value
 SHOW_ONLY_HIGHEST_SCORE = True  # Show only the object with highest score
 SHOW_SPECIFIC_OBJECT_ID = None   # Show only specific object ID (0, 1, 2, etc.) or None for all
                                  # Note: This overrides SHOW_ONLY_HIGHEST_SCORE if set
@@ -155,20 +155,31 @@ with open("../../camera_intrinsics/camera.json") as f:
         [cam_K[6], cam_K[7], cam_K[8]]
     ])
 
-def create_3d_bbox(bbox_2d, depth_est, aspect_ratio=1.0):
-    """Create 3D bounding box corners based on 2D bbox and estimated depth"""
+def create_3d_bbox_from_2d_center(bbox_2d, depth_est, K, aspect_ratio=1.0):
+    """Create 3D bounding box corners based on 2D bbox center and estimated depth"""
     x, y, w, h = bbox_2d
     
+    # Calculate 2D bounding box center
+    center_2d_x = x + w / 2
+    center_2d_y = y + h / 2
+    
+    # Back-project 2D center to 3D space at given depth
+    # Using inverse camera projection: P_3D = depth * K^(-1) * [u, v, 1]^T
+    K_inv = np.linalg.inv(K)
+    center_2d_homogeneous = np.array([center_2d_x, center_2d_y, 1.0])
+    center_3d = depth_est * (K_inv @ center_2d_homogeneous)  # 3D center in camera coordinates
+    
     # Estimate object dimensions based on 2D bbox size and depth
-    # These are rough estimates - in practice you'd want more sophisticated methods
-    obj_width = w * depth_est / 1000.0  # Convert pixel size to approximate world size
-    obj_height = h * depth_est / 1000.0
+    # Convert pixel size to approximate world size using similar triangles
+    obj_width = w * depth_est / K[0, 0]   # Using focal length fx
+    obj_height = h * depth_est / K[1, 1]  # Using focal length fy
     obj_depth = min(obj_width, obj_height) * aspect_ratio  # Assume depth proportional to other dims
     
-    # Define 3D box corners centered at origin
+    # Define 3D box corners relative to the calculated 3D center
     half_w, half_h, half_d = obj_width/2, obj_height/2, obj_depth/2
     
-    box_3D = np.array([
+    # Create box corners centered at origin, then translate to 3D center
+    box_3D_local = np.array([
         [-half_w, -half_h, -half_d],  # bottom face
         [ half_w, -half_h, -half_d],
         [ half_w,  half_h, -half_d],
@@ -179,7 +190,10 @@ def create_3d_bbox(bbox_2d, depth_est, aspect_ratio=1.0):
         [-half_w,  half_h,  half_d],
     ]).T  # shape: (3, 8)
     
-    return box_3D
+    # Translate box to 3D center position
+    box_3D = box_3D_local + center_3d.reshape(3, 1)
+    
+    return box_3D, center_3d
 
 def rotation_matrix_to_euler(R):
     """Convert rotation matrix to Euler angles (in degrees)"""
@@ -267,20 +281,19 @@ for i, obj in enumerate(preds):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, TEXT_COLOR, 1)
 
     # Calculate 3D bounding box dimensions (needed for both 3D bbox and pose axes)
-    if SHOW_3D_BBOX:
+    if SHOW_3D_BBOX or SHOW_POSE_AXES:
       depth_estimate = np.linalg.norm(t)  # Use distance from camera as depth estimate
-      box_3D = create_3d_bbox(bbox_2d, depth_estimate, aspect_ratio=0.8)
+      box_3D, center_3d = create_3d_bbox_from_2d_center(bbox_2d, depth_estimate, K, aspect_ratio=0.8)
     
-      # Get bounding box dimensions for axis scaling
+      # Get bounding box dimensions for axis scaling (using proper camera projection)
       x, y, w, h = bbox_2d
-      obj_width = w * depth_estimate / 1000.0
-      obj_height = h * depth_estimate / 1000.0
+      obj_width = w * depth_estimate / K[0, 0]   # Using focal length fx
+      obj_height = h * depth_estimate / K[1, 1]  # Using focal length fy
       obj_depth = min(obj_width, obj_height) * 0.8
 
     if SHOW_3D_BBOX:
-        # Transform 3D box to camera coordinates (apply rotation and translation)
-        box_cam = R @ box_3D + t  # shape: (3, 8)
-        proj = K @ box_cam
+        # The 3D box is already positioned based on 2D bbox center, just project to image
+        proj = K @ box_3D
         
         # Check if points are in front of camera (positive Z)
         valid_depth = proj[2] > 0
@@ -314,27 +327,30 @@ for i, obj in enumerate(preds):
             for j in range(4):
                 cv2.line(target_img, tuple(proj[j]), tuple(proj[j + 4]), vertical_color, edge_thickness)
             
-            # Draw center point
-            center_3d = np.mean(proj, axis=0).astype(int)
-            cv2.circle(target_img, tuple(center_3d), 4, (255, 255, 255), -1)
-            cv2.circle(target_img, tuple(center_3d), 5, box_color, 2)
+            # Draw center point (project 3D center to image)
+            center_3d_proj = K @ center_3d.reshape(3, 1)
+            if center_3d_proj[2, 0] > 0:  # Check if center is in front of camera
+                center_2d_proj = (center_3d_proj[:2] / center_3d_proj[2]).flatten().astype(int)
+                cv2.circle(target_img, tuple(center_2d_proj), 4, (255, 255, 255), -1)
+                cv2.circle(target_img, tuple(center_2d_proj), 5, box_color, 2)
 
-    # Draw coordinate axes to show object orientation
+    # Draw coordinate axes to show object orientation (centered on 2D bbox center)
     if SHOW_POSE_AXES:
         # Set axis lengths to reach the edges of the bounding box
         x_axis_length = obj_width / 2    # Extends to edge of bbox in X direction
         y_axis_length = obj_height / 2   # Extends to edge of bbox in Y direction  
         z_axis_length = obj_depth / 2    # Extends to edge of bbox in Z direction
         
+        # Create axes centered at the 3D center derived from 2D bbox center
         axes = np.float32([
-            [0, 0, 0],                          # Origin
+            [0, 0, 0],                          # Origin at 3D center
             [x_axis_length, 0, 0],              # X axis (red) - extends to bbox edge
             [0, y_axis_length, 0],              # Y axis (green) - extends to bbox edge
             [0, 0, z_axis_length]               # Z axis (blue) - extends to bbox edge
         ]).T
         
-        # Transform axes to camera coordinates
-        pts = R @ axes + t
+        # Translate axes to the 3D center position (derived from 2D bbox center)
+        pts = axes + center_3d.reshape(3, 1)
         pts_proj = K @ pts
         
         # Check if axis points are in front of camera
