@@ -7,6 +7,7 @@ xhost +si:localuser:root
 docker run -it --rm \
     --gpus all \
     -e DISPLAY=$DISPLAY \
+    -e NVIDIA_DRIVER_CAPABILITIES=all \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
     -v /home/junjieg2/sam_6d:/workspace \
     -w /workspace \

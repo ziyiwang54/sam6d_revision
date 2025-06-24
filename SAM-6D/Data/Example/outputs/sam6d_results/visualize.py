@@ -281,19 +281,20 @@ for i, obj in enumerate(preds):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, TEXT_COLOR, 1)
 
     # Calculate 3D bounding box dimensions (needed for both 3D bbox and pose axes)
-    if SHOW_3D_BBOX or SHOW_POSE_AXES:
+    if SHOW_3D_BBOX:
       depth_estimate = np.linalg.norm(t)  # Use distance from camera as depth estimate
-      box_3D, center_3d = create_3d_bbox_from_2d_center(bbox_2d, depth_estimate, K, aspect_ratio=0.8)
+      box_3D, center_3d= create_3d_bbox_from_2d_center(bbox_2d, depth_estimate,K , aspect_ratio=0.8)
     
-      # Get bounding box dimensions for axis scaling (using proper camera projection)
+      # Get bounding box dimensions for axis scaling
       x, y, w, h = bbox_2d
-      obj_width = w * depth_estimate / K[0, 0]   # Using focal length fx
-      obj_height = h * depth_estimate / K[1, 1]  # Using focal length fy
+      obj_width = w * depth_estimate / 1000.0
+      obj_height = h * depth_estimate / 1000.0
       obj_depth = min(obj_width, obj_height) * 0.8
 
     if SHOW_3D_BBOX:
-        # The 3D box is already positioned based on 2D bbox center, just project to image
-        proj = K @ box_3D
+        # Transform 3D box to camera coordinates (apply rotation and translation)
+        box_cam = R @ box_3D + t  # shape: (3, 8)
+        proj = K @ box_cam
         
         # Check if points are in front of camera (positive Z)
         valid_depth = proj[2] > 0
@@ -327,30 +328,28 @@ for i, obj in enumerate(preds):
             for j in range(4):
                 cv2.line(target_img, tuple(proj[j]), tuple(proj[j + 4]), vertical_color, edge_thickness)
             
-            # Draw center point (project 3D center to image)
-            center_3d_proj = K @ center_3d.reshape(3, 1)
-            if center_3d_proj[2, 0] > 0:  # Check if center is in front of camera
-                center_2d_proj = (center_3d_proj[:2] / center_3d_proj[2]).flatten().astype(int)
-                cv2.circle(target_img, tuple(center_2d_proj), 4, (255, 255, 255), -1)
-                cv2.circle(target_img, tuple(center_2d_proj), 5, box_color, 2)
+            # Draw center point
+            x, y, w, h = bbox_2d
+            center_2d = (int(x + w / 2), int(y + h / 2))
+            cv2.circle(target_img, center_2d, 4, (255, 255, 255), -1)
+            cv2.circle(target_img, (center_2d), 5, box_color, 2)
 
-    # Draw coordinate axes to show object orientation (centered on 2D bbox center)
+    # Draw coordinate axes to show object orientation
     if SHOW_POSE_AXES:
         # Set axis lengths to reach the edges of the bounding box
         x_axis_length = obj_width / 2    # Extends to edge of bbox in X direction
         y_axis_length = obj_height / 2   # Extends to edge of bbox in Y direction  
         z_axis_length = obj_depth / 2    # Extends to edge of bbox in Z direction
         
-        # Create axes centered at the 3D center derived from 2D bbox center
         axes = np.float32([
-            [0, 0, 0],                          # Origin at 3D center
+            [0, 0, 0],                          # Origin
             [x_axis_length, 0, 0],              # X axis (red) - extends to bbox edge
             [0, y_axis_length, 0],              # Y axis (green) - extends to bbox edge
             [0, 0, z_axis_length]               # Z axis (blue) - extends to bbox edge
         ]).T
         
-        # Translate axes to the 3D center position (derived from 2D bbox center)
-        pts = axes + center_3d.reshape(3, 1)
+        # Transform axes to camera coordinates
+        pts = R @ axes + t
         pts_proj = K @ pts
         
         # Check if axis points are in front of camera
