@@ -79,14 +79,26 @@ class FastSAM(object):
         segmentor_width_size=None,
         device=None,
     ):
-        self.model = CustomYOLO(
-            model=checkpoint_path,
-            iou=config.iou_threshold,
-            conf=config.conf_threshold,
-            max_det=config.max_det,
-            selected_device=device,
-            segmentor_width_size=segmentor_width_size,
-        )
+        # self.model = CustomYOLO(
+        #     model=checkpoint_path,
+        #     iou=config.iou_threshold,
+        #     conf=config.conf_threshold,
+        #     max_det=config.max_det,
+        #     selected_device=device,
+        #     segmentor_width_size=segmentor_width_size,
+        # )
+
+        self.model = YOLO(checkpoint_path)
+        self.model.overrides.update({
+            "iou":     config.iou_threshold,
+            "conf":    config.conf_threshold,
+            "max_det": config.max_det,
+            "imgsz":   segmentor_width_size,
+            "mode":    "predict",
+            "save":    False,
+        })
+        self.model.to(device)
+        # self.model.args.half &= (device != "cpu")
         self.segmentor_width_size = segmentor_width_size
         self.current_device = device
         logging.info(f"Init FastSAM done!")
@@ -113,7 +125,9 @@ class FastSAM(object):
     def generate_masks(self, image) -> List[Dict[str, Any]]:
         if self.segmentor_width_size is not None:
             orig_size = image.shape[:2]
-        detections = self.model(image)
+        # detections = self.model(image)
+
+        detections = self.model(source=image, stream=False)
 
         masks = detections[0].masks.data
         boxes = detections[0].boxes.data[:, :4]  # two lasts:  confidence and class
